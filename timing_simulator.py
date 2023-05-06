@@ -2,6 +2,28 @@ import os
 import argparse
 from queue import Queue
 
+class CONFIG(object):
+    def __init__(self, iodir):
+        self.size = pow(2, 16) # Can hold a maximum of 2^16 instructions.
+        self.filepath = os.path.abspath(os.path.join(iodir, "Config.txt"))
+        self.config = []
+
+        try:
+            with open(self.filepath, 'r') as insf:
+                self.config = [ins.strip() for ins in insf.readlines() if not (ins.startswith('#') or ins.strip() == '')]
+            print("Config - Config loaded from file:", self.filepath)
+            # print("IMEM - Instructions:", self.instructions)
+        except:
+            print("Config - ERROR: Couldn't open file in path:", self.filepath)
+
+    def Read(self, idx): # Use this to read from IMEM.
+        #print("Instr"+str(self.instructions));
+        if idx < self.size:
+            return self.config[idx]
+        else:
+            print("IMEM - ERROR: Invalid memory access at index: ", idx, " with memory size: ", self.size)
+
+
 class IMEM(object):
     def __init__(self, iodir):
         self.size = pow(2, 16) # Can hold a maximum of 2^16 instructions.
@@ -34,9 +56,9 @@ class Instr():
 class vls_Memory():
     def __init__(self, access_time):
         #all parameters from config file
-        self.banks = 16
-        self.bank_busy = [0]*16 # all banks are intially free and need to check before issuing the request
-        self.bank_access_count = [access_time]*16
+        self.banks = num_banks
+        self.bank_busy = [0]*num_banks # all banks are intially free and need to check before issuing the request
+        self.bank_access_count = [access_time]*num_banks
         self.access_time = access_time 
 
     def issue_request(self, bank_no):
@@ -50,8 +72,8 @@ class vls_Memory():
                 self.bank_access_count[i] = self.bank_access_count[i] - 1 if (self.bank_access_count[i] - 1) > 0 else 0
                 if self.bank_access_count[i] == 0 : 
                     self.bank_busy[i] = 0
-        print(f"accesss times - {self.bank_access_count}")
-        print(f"bank busy -     {self.bank_busy}")
+        #print(f"accesss times - {self.bank_access_count}")
+        #print(f"bank busy -     {self.bank_busy}")
 
 
 class arch_state():
@@ -190,11 +212,7 @@ class arch_state():
         else:
             self.busy_board = list(set().union(set(self.scalar_exe.regs_used), set(self.busy_board)))
 
-mul_pipe_depth = 12
-add_pipe_depth = 2
-div_pipe_depth = 8
-num_banks = 1
-vls_pipe_depth = 1
+
 program_counter = 0
 Halt_condition = 0
 
@@ -224,7 +242,7 @@ def decode(instr=str):
         #print(instr[-1][1:-1])
         temp =  list(map(int, instr[-1][1:-1].split(',')))
         #temp = temp
-        [a.mems.put(k%16) for k in temp]#
+        [a.mems.put(k%num_banks) for k in temp]#
         a.regs_used = instr[1:-1] # registers used
         a.ls_element_flags = [0]*len(temp)
     elif "HALT" == instr[0]:
@@ -258,7 +276,42 @@ if __name__ == "__main__":
     # Parse IMEM
     imem = IMEM(iodir)  
     #print("Imem="+str(imem[0]))
-    Vmips = arch_state(4,4,4)
+    config= CONFIG(iodir)
+    #print("CONFIG : "+str(config.config))
+    for config_param in config.config:
+        if('dataQueueDepth' in config_param):
+            dataQueueDepth = config_param.split(" = ")[1]
+            print("CONFIG dataQueueDepth="+str(dataQueueDepth))
+        elif('computeQueueDepth' in config_param):
+            computeQueueDepth = config_param.split(" = ")[1]
+            print("CONFIG computeQueueDepth="+str(computeQueueDepth))
+        elif('vdmNumBanks' in config_param):
+            vdmNumBanks = config_param.split(" = ")[1]
+            print("CONFIG vdmNumBanks="+str(vdmNumBanks))  
+        elif('vlsPipelineDepth' in config_param):
+            vlsPipelineDepth = config_param.split(" = ")[1]
+            print("CONFIG vlsPipelineDepth="+str(vlsPipelineDepth))
+        elif('numLanes' in config_param):
+            numLanes = config_param.split(" = ")[1]
+            print("CONFIG numLanes="+str(numLanes))
+        elif('pipelineDepthMul' in config_param):
+            pipelineDepthMul = config_param.split(" = ")[1]
+            print("CONFIG computeQueueDepth="+str(pipelineDepthMul))
+        elif('pipelineDepthAdd' in config_param):
+            pipelineDepthAdd = config_param.split(" = ")[1]
+            print("CONFIG pipelineDepthAdd="+str(pipelineDepthAdd))
+        elif('pipelineDepthDiv' in config_param):
+            pipelineDepthDiv = config_param.split(" = ")[1]
+            print("CONFIG pipelineDepthDiv="+str(pipelineDepthDiv)) 
+
+    mul_pipe_depth = int(pipelineDepthMul)
+    add_pipe_depth = int(pipelineDepthAdd)
+    div_pipe_depth = int(pipelineDepthDiv)
+    num_banks = int(vdmNumBanks)
+    vls_pipe_depth = int(vlsPipelineDepth)
+    
+    Vmips = arch_state(int(dataQueueDepth),int(computeQueueDepth),int(numLanes))
+    #Vmips = arch_state(4,4,4)
     Vmips.IMEM = imem
     vls_mem = vls_Memory(6)
 
@@ -284,22 +337,17 @@ if __name__ == "__main__":
         Vmips.shift()
         Vmips.execute_one_cycle()
         #Vmips.shift()
-        print('#'*12)
-        print(Vmips.fetch.instr_type, Vmips.fetch.exe_time, Vmips.decode.instr_type, Vmips.decode.exe_time)
-        for i in range(0,Vmips.num_lanes):
-            print(Vmips.vls_exe[i].instr_type, Vmips.vls_exe[i].exe_time[2])
-            print(Vmips.vcomp_exe[i].instr_type, Vmips.vcomp_exe[i].exe_time[2])
-        print("pipeline busy - {}".format(Vmips.pipeline_busy))
-        print(Halt_condition)
-        print(Vmips.busy_lanes == [0]*Vmips.num_lanes, Vmips.vls_busy_lanes == [0]* Vmips.num_lanes, Vmips.scalar_exe.exe_time[2] == 0 
-                , Vmips.vcomp_queue.empty() , Vmips.vls_queue.empty() , Vmips.scalar_queue.empty())
-        print(Vmips.busy_lanes, Vmips.vls_busy_lanes, Vmips.busy_board)
+        #print('#'*12)
+        #print(Vmips.fetch.instr_type, Vmips.fetch.exe_time, Vmips.decode.instr_type, Vmips.decode.exe_time)
+        #for i in range(0,Vmips.num_lanes):
+            #print(Vmips.vls_exe[i].instr_type, Vmips.vls_exe[i].exe_time[2])
+            #print(Vmips.vcomp_exe[i].instr_type, Vmips.vcomp_exe[i].exe_time[2])
+        #print("pipeline busy - {}".format(Vmips.pipeline_busy))
+        #print(Halt_condition)
+        #print(Vmips.busy_lanes == [0]*Vmips.num_lanes, Vmips.vls_busy_lanes == [0]* Vmips.num_lanes, Vmips.scalar_exe.exe_time[2] == 0 
+        #        , Vmips.vcomp_queue.empty() , Vmips.vls_queue.empty() , Vmips.scalar_queue.empty())
+        #print(Vmips.busy_lanes, Vmips.vls_busy_lanes, Vmips.busy_board)
 
-        if (Halt_condition == 1 and Vmips.busy_lanes == [0]*Vmips.num_lanes and Vmips.vls_busy_lanes == [0]*Vmips.num_lanes and Vmips.scalar_exe.exe_time[2] == 0 
-            and Vmips.vcomp_queue.empty() and Vmips.vls_queue.empty() and Vmips.scalar_queue.empty()):
-            print('HALT Encountered')
-            print(cycle_count)
-            break
 
 
     
